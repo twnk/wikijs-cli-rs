@@ -1,0 +1,1 @@
+# wikijs-cli-rs
