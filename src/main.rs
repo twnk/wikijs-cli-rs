@@ -345,22 +345,28 @@ async fn main() -> Result<()> {
                     ))?;
                     let blank = String::new();
                     term.write_line(&fails.iter().map(
-                        |f| format!(
-                            "Code: {} Slug: {} Message: {}", 
+                        |(f,pg)| format!(
+                            "Code: {} Slug: {} Message: {}{}", 
                             f.error_code, 
                             f.slug, 
-                            &f.message.as_ref().unwrap_or(&blank)
+                            &f.message.as_ref().unwrap_or(&blank),
+                            match pg {
+                                Some(p) => format!("Page: {} {} ({})",p.path, p.title, p.tags.iter().filter_map(|t|match t {
+                                    Some(tag) => Some(tag.tag.clone()),
+                                    None => None
+                                }).join(", ")),
+                                None => String::new()
+                            }
                         )).join("\n"))?;
                 }
             }
 
             let proceed = Confirm::new()
-                .with_prompt("Proceed to moving pages?")
+                .with_prompt("Do you want to proceed to move pages?")
                 .interact_on(&Term::stderr())?;
 
-            if !proceed {bail!("User did not proceed.")}
+            if !proceed {bail!("User did not want to proceed.")} // is it an error? 
 
-            wiki.move_pages(&pages, &path, &destination).await?;
             
             
         }

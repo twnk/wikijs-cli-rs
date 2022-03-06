@@ -2,7 +2,7 @@ use std::{future::Future, collections::HashMap};
 use futures::future::join_all;
 
 use cynic::{QueryBuilder, MutationBuilder, Operation, serde_json::Value};
-use queries::ResponseStatus;
+use queries::{ResponseStatus, Page};
 use reqwest::{ClientBuilder, header, Response};
 use itertools::{Itertools, process_results};
 use anyhow::{Result, bail};
@@ -65,25 +65,66 @@ mod queries {
     }
 
     // Tag a Page 
+
     #[derive(cynic::FragmentArguments, Debug)]
-    pub struct TagArguments {
+    pub struct AddTagsMutationArguments {
         pub id: i32,
-        pub tag: String,
+        pub tags: Option<Vec<Option<String>>>,
+    }
+
+    #[derive(cynic::QueryFragment, Debug)]
+    #[cynic(graphql_type = "Mutation", argument_struct = "AddTagsMutationArguments")]
+    pub struct AddTagsMutation {
+        pub pages: Option<PageMutation>,
+    }
+
+    #[derive(cynic::QueryFragment, Debug)]
+    #[cynic(argument_struct = "AddTagsMutationArguments")]
+    pub struct PageMutation {
+        #[arguments(id= &args.id, tags= &args.tags)]
+        pub update: Option<PageResponse>,
+    }
+
+    #[derive(cynic::QueryFragment, Debug)]
+    pub struct PageResponse {
+        pub page: Option<Page>,
+        pub response_result: ResponseStatus,
+    }
+
+    #[derive(cynic::QueryFragment, Debug)]
+    pub struct Page {
+        pub id: i32,
+        pub path: String,
+        pub tags: Vec<Option<PageTag>>,
         pub title: String,
     }
 
     #[derive(cynic::QueryFragment, Debug)]
-    #[cynic(graphql_type = "Mutation", argument_struct = "TagArguments")]
-    pub struct Tag {
-        pub pages: Option<PageTagMutation>,
+    pub struct PageTag {
+        pub tag: String,
+        pub id: i32,
+        pub title: Option<String>,
     }
 
-    #[derive(cynic::QueryFragment, Debug)]
-    #[cynic(graphql_type = "PageMutation", argument_struct = "TagArguments")]
-    pub struct PageTagMutation {
-        #[arguments(title = &args.title, id = &args.id, tag = &args.tag)]
-        pub update_tag: Option<DefaultResponse>,
-    }
+    // #[derive(cynic::FragmentArguments, Debug)]
+    // pub struct TagArguments {
+    //     pub id: i32,
+    //     pub tag: String,
+    //     pub title: String,
+    // }
+
+    // #[derive(cynic::QueryFragment, Debug)]
+    // #[cynic(graphql_type = "Mutation", argument_struct = "TagArguments")]
+    // pub struct Tag {
+    //     pub pages: Option<PageTagMutation>,
+    // }
+
+    // #[derive(cynic::QueryFragment, Debug)]
+    // #[cynic(graphql_type = "PageMutation", argument_struct = "TagArguments")]
+    // pub struct PageTagMutation {
+    //     #[arguments(title = &args.title, id = &args.id, tag = &args.tag)]
+    //     pub update_tag: Option<DefaultResponse>,
+    // }
 
     // Move a Page
 
@@ -136,7 +177,7 @@ pub struct ListPages {
 
 pub struct TagSuccess {
     pub success_count: usize,
-    pub failures: Option<Vec<ResponseStatus>>,
+    pub failures: Option<Vec<(ResponseStatus, Option<Page>)>>,
     pub safety_tag: String,
     pub tags: Vec<String>
 }
@@ -207,12 +248,6 @@ impl Wiki {
         Ok( ListPages{ pages: filtered_pages, pages_returned})
     }
 
-    // async fn tag_page<'a>(&self, page: &'a queries::PageListItem, tags: Vec<&'a str>) 
-    // -> Result<impl Iterator<Item = Operation<'a, queries::Tag>> + 'a> {
-        
-    //     Ok(ops)
-    // }
-
     pub async fn tag_pages(
         &self, 
         pages: &Vec<queries::PageListItem>, 
@@ -236,28 +271,31 @@ impl Wiki {
             safety_tag_string
         };
 
-        let mut tags = vec![safety_tag.clone()];
+        let mut new_tags = vec![Some(safety_tag.clone())];
 
         match add_tags {
-            Some(ts) => {tags.extend(ts)},
+            Some(ts) => {new_tags.extend(ts.into_iter().map(|t|Some(t)))},
             None => {}
         }
 
-        // generate an op for each page for each tag
+        // generate an op for each page
         let ops = pages
             .iter()
             .map(|p| {
-                tags.iter().map(|t| {
-                    queries::Tag::build(
-                        queries::TagArguments{
-                            id: p.id, 
-                            tag: t.to_string(), 
-                            title: t.to_string()
-                        }
-                    )
-                })
+                // unfortunately these do need to be new allocations because the API wants strings not slices
+                let mut page_tags_updated = new_tags.clone();
+
+                match &p.tags {
+                    Some(ts) => {page_tags_updated.extend(ts.clone());}
+                    None => {}
+                }
+                queries::AddTagsMutation::build(
+                    queries::AddTagsMutationArguments{
+                        id: p.id, 
+                        tags: Some(page_tags_updated)
+                    }
+                )
             })
-            .flatten()
             .collect::<Vec<_>>();
 
         let requests = ops.iter().map(|op| {
@@ -299,8 +337,8 @@ impl Wiki {
                 
                 match tag {
                     Some(t) => match t.pages {
-                            Some(ptm) => match ptm.update_tag {
-                                Some(dr) => dr.response_result,
+                            Some(ptm) => match ptm.update {
+                                Some(dr) => Some((dr.response_result, dr.page)),
                                 None => None
                             },
                             None => None
@@ -308,27 +346,14 @@ impl Wiki {
                     None => None
                     }     
                 })
-            .partition(|dr| dr.succeeded);
+            .partition(|(rs, p)| rs.succeeded);
 
         Ok(TagSuccess{
             success_count: ok.len(), 
             failures: match err.len() {0 => None, _ => Some(err)}, 
             safety_tag,
-            tags
+            tags: new_tags.into_iter().filter_map(|t|t).collect::<Vec<_>>()
          })
-    }
-
-    pub async fn move_pages(
-        &self, 
-        pages: &Vec<queries::PageListItem>, 
-        prefix: &str, 
-        destination: &str) 
-        -> Result<()> {
-        
-        
-        println!("Did not move pages! This bit isn't done yet...");
-        
-        Ok(())
     }
 
 
