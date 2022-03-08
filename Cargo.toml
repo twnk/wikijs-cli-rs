@@ -20,6 +20,7 @@ clap = { version = "3.1.5", features = [ "derive", "unicode", "wrap_help" ] }
 console = "0.15.0"
 dialoguer = "0.10.0"
 human-panic = "1.0.3"
+confy = "0.4.0"
 
 # Wiki / GraphQL
 cynic = { version = "1.0.0", features = [ ] }
@@ -31,6 +32,7 @@ tokio = { version = "1", features = ["full"] }
 # General
 itertools = "0.10.3"
 anyhow = "1.0"
+serde = "1.0.136"
 futures = "0.3.21"
 
 [dev-dependencies]

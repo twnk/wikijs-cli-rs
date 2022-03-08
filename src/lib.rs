@@ -157,27 +157,36 @@ const USER_AGENT: &str = concat!(
     env!("CARGO_PKG_VERSION")
 );
 pub struct Wiki {
-    client: reqwest::Client
+    client: reqwest::Client,
+    endpoint: String
 }
 
 impl Wiki {
-    pub fn new(bearer: &'static str) -> Wiki {
+    pub fn new(
+        bearer: &'static str,
+        endpoint: String,
+        http2: bool,
+        https: bool
+    ) -> Wiki {
         let mut headers = header::HeaderMap::new();
         
         let mut auth_value = header::HeaderValue::from_static(bearer);
         auth_value.set_sensitive(true);
         headers.insert(header::AUTHORIZATION, auth_value);
 
-        let client = ClientBuilder::new()
-        .http2_prior_knowledge()
-        .https_only(true)
+        let client_builder = ClientBuilder::new()
+        .https_only(https)
         .user_agent(USER_AGENT)
-        .default_headers(headers)
-        .build()
-        .expect("Failed to initialise http client");
+        .default_headers(headers);
+
+        let client = match http2 {
+            true => {client_builder.http2_prior_knowledge()}
+            false => {client_builder}
+        }.build().expect("Failed to initialise http client");
         
         Wiki {
-            client
+            client,
+            endpoint
         }
     }
 
@@ -187,7 +196,7 @@ impl Wiki {
         );
         
         let raw_response = self.client
-            .post("https://wiki.redfightback.org/graphql")
+            .post(&self.endpoint)
             .json(&op)
             .send()
             .await
@@ -223,7 +232,6 @@ impl Wiki {
         prefix: &str, 
         destination: &str,
     ) -> Result<MoveSuccess> {
-        let page_count = pages.len();
 
         let trim = prefix.len();
 
@@ -242,7 +250,7 @@ impl Wiki {
 
         let requests = ops.iter().map(|op| {
             self.client
-                .post("https://wiki.redfightback.org/graphql")
+                .post(&self.endpoint)
                 .json(op)
                 .send()
         });
