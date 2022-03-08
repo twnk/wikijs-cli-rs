@@ -4,7 +4,7 @@ use reqwest::{ClientBuilder, header};
 use itertools::{Itertools};
 use anyhow::{Result, bail};
 
-use queries::{ResponseStatus, PageListItem, ListAllPages, ListAllPagesArguments, MoveSinglePage, MoveSinglePageArguments};
+use queries::{ResponseStatus, PageListItem, ListAllPages, ListAllPagesArguments, MoveSinglePage, MoveSinglePageArguments, GetWikiTitle};
 
 /// Code for Queries generated using <https://generator.cynic-rs.dev/>. 
 /// The code generation is currently running an unreleased version with some newer syntax.
@@ -134,6 +134,23 @@ mod queries {
         pub succeeded: bool,
     }
 
+    // Retrieve Wiki Title
+    #[derive(cynic::QueryFragment, Debug)]
+    #[cynic(graphql_type = "Query")]
+    pub struct GetWikiTitle {
+        pub site: Option<SiteQuery>,
+    }
+
+    #[derive(cynic::QueryFragment, Debug)]
+    pub struct SiteQuery {
+        pub config: Option<SiteConfig>,
+    }
+
+    #[derive(cynic::QueryFragment, Debug)]
+    pub struct SiteConfig {
+        pub title: Option<String>,
+    }
+
 }
 
 mod schema {
@@ -161,33 +178,67 @@ pub struct Wiki {
     endpoint: String
 }
 
+pub struct WikiConfig {
+    pub api_key: String,
+    pub endpoint: String,
+    pub http2: bool,
+    pub https: bool
+}
+
 impl Wiki {
     pub fn new(
-        bearer: &'static str,
-        endpoint: String,
-        http2: bool,
-        https: bool
+        conf: WikiConfig
     ) -> Wiki {
         let mut headers = header::HeaderMap::new();
         
-        let mut auth_value = header::HeaderValue::from_static(bearer);
+        let bearer = "Bearer ".to_string() + &conf.api_key;
+
+        let mut auth_value = header::HeaderValue::from_str(&bearer).unwrap();
         auth_value.set_sensitive(true);
         headers.insert(header::AUTHORIZATION, auth_value);
 
         let client_builder = ClientBuilder::new()
-        .https_only(https)
+        .https_only(conf.https)
         .user_agent(USER_AGENT)
         .default_headers(headers);
 
-        let client = match http2 {
+        let client = match conf.http2 {
             true => {client_builder.http2_prior_knowledge()}
             false => {client_builder}
         }.build().expect("Failed to initialise http client");
         
         Wiki {
             client,
-            endpoint
+            endpoint: conf.endpoint
         }
+    }
+
+    pub async fn get_wiki_title(&self) -> Result<String> {
+        let op = GetWikiTitle::build(());
+        let raw_response = self.client
+            .post(&self.endpoint)
+            .json(&op)
+            .send()
+            .await
+            .expect("Response had a problem");
+
+        let json = raw_response.json().await.expect("Json decoding issue");
+
+        let response = op.decode_response(json).unwrap();
+
+        match response.data {
+            Some(gwt) => match gwt.site {
+                Some(sq) => match sq.config {
+                    Some(sc) => match sc.title {
+                        Some(t) => Ok(t),
+                        None => bail!("No title"),
+                    },
+                    None => bail!("No config returned"),
+                },
+                None => bail!("No site returned")
+            }
+            None => bail!("No data in response")
+         }
     }
 
     pub async fn list_pages(&self, prefix: &str, tags: Option<Vec<String>> ) -> Result<ListPages> {

@@ -10,7 +10,6 @@ use owo_colors::colors::*;
 use owo_colors::{OwoColorize, Stream, Style};
 use confy;
 
-mod creds;
 mod lib;
 use lib::Wiki;
 
@@ -49,6 +48,17 @@ enum Command {
         #[clap(long, short = 't')]
         tags: Option<Vec<String>>,
     },
+
+    /// Generate config file
+    Config {
+        /// Interactive mode
+        #[clap(long, short = 'i')]
+        interactive: bool,
+
+        /// File location
+        #[clap(long, short = 'o', parse(from_os_str))]
+        output: Option<std::path::PathBuf>,
+    }
 }
 
 #[derive(Debug, Args)]
@@ -61,9 +71,17 @@ struct GlobalOpts {
     #[clap(long, short, global = true, parse(from_occurrences))]
     verbose: usize,
 
+    /// Config File
+    #[clap(long, global = true, parse(from_os_str))]
+    config: Option<std::path::PathBuf>,
+
+    /// GraphQL API Key
+    #[clap(long, global = true)]
+    api_key: Option<String>,
+
     /// GraphQL Endpoint
     #[clap(long, global = true)]
-    endpoint: String,
+    endpoint: Option<String>,
 
     /// HTTP2 (Default On)
     #[clap(long, global = true)]
@@ -94,25 +112,50 @@ impl Color {
 
 
 #[derive(Serialize, Deserialize)]
-struct WikcliConfig {
-    color: String,
-    api_key: String,
-    endpoint: String,
-    no_http2_prior_knowledge: bool,
-    no_force_https: bool
+struct WikcliConfig { 
+    api_key: Option<String>,
+    endpoint: Option<String>,
+    no_http2_prior_knowledge: Option<bool>,
+    no_force_https: Option<bool>
 
 }
 
 /// Default values for `WikcliConfig`
 impl ::std::default::Default for WikcliConfig {
-    fn default() -> Self { Self { 
-        color: "auto".to_string(), 
-        api_key: "API_KEY".to_string(), 
-        endpoint: "GRAPHQL_ENDPOINT".to_string(), 
-        no_http2_prior_knowledge: false, 
-        no_force_https: false
-    } }
+    fn default() -> Self { 
+        Self { 
+            api_key: None, 
+            endpoint: None, 
+            no_http2_prior_knowledge: None, 
+            no_force_https: None
+        } 
+    }
 }
+
+
+fn wiki_config(cfg: &WikcliConfig, globals: &GlobalOpts) -> Result<lib::WikiConfig> {
+    let api_key = match (&globals.api_key, &cfg.api_key) {
+        (Some(k), _) => k.clone(),
+        (_, Some(k)) => k.clone(), 
+        (None, None) => bail!("You must specify an API key via --api-key or config")
+    };
+    let endpoint = match (&globals.endpoint, &cfg.endpoint) {
+        (Some(k), _) => k.clone(),
+        (_, Some(k)) => k.clone(), 
+        (None, None) => bail!("You must specify an endpoint via --endpoint or config")
+    };
+    // nb: we're inverting from no_http2 to (yes_) http2
+    let http2 = match cfg.no_http2_prior_knowledge {
+        Some(true) => false, // http2 off via config
+        _ => !globals.no_http2_prior_knowledge // http2 off via globals
+    }; 
+    let https = match cfg.no_force_https {
+        Some(true) => false, // force https off via config
+        _ => !globals.no_force_https // https off via globals
+    }; 
+    Ok(lib::WikiConfig { api_key, endpoint, http2, https })
+}
+
 
 struct Styles {
     scaffold: Style,
@@ -126,9 +169,12 @@ async fn main() -> Result<()> {
     // Make panic message more useful
     human_panic::setup_panic!();
 
-    let cfg = confy::load(env!("CARGO_PKG_NAME"))?;
-
     let app = App::parse();
+
+    let cfg: WikcliConfig = match app.global_opts.config {
+        Some(ref p) => {confy::load_path(p)?}
+        None => {confy::load(env!("CARGO_PKG_NAME"))?}
+    };
 
     // Windows 10 Terminals can do ANSI colors with your help!
     match enable_ansi_support::enable_ansi_support() {
@@ -148,24 +194,83 @@ async fn main() -> Result<()> {
         output: Style::new().fg::<xterm::ElectricIndigo>().on_bright_white(),
     };
 
-    term.write_line(&format!(
-        "{} {}  {}.",
-        "[1/3]".if_supports_color(Stream::Stdout, |text| text.style(styles.scaffold)),
-        Emoji("☎️", ""),
-        "Preparing to connect to the Wiki"
-            .if_supports_color(Stream::Stdout, |text| text.style(styles.message))
-    ))?;
-
-    // Clap doesn't allow for default-true boolean flags so we have to negate
-    let wiki = Wiki::new(
-        creds::BEARER, 
-        app.global_opts.endpoint,
-        !app.global_opts.no_http2_prior_knowledge,
-        !app.global_opts.no_force_https
-    );
 
     match app.command {
+        Command::Config { output, interactive } => {
+            let api_key = match &app.global_opts.api_key {
+                Some(k) => Some(k.clone()),
+                None => match interactive {
+                    false => None,
+                    true => {Some(dialoguer::Password::new()
+                        .with_prompt("Enter your API Key: ")
+                        .interact()?)}
+                }
+            };
+
+            let endpoint = match &app.global_opts.endpoint {
+                Some(k) => Some(k.clone()),
+                None => match interactive {
+                    false => None,
+                    true => {Some(dialoguer::Input::new()
+                        .with_prompt("Enter your API Endpoint: ")
+                        .interact()?)}
+                }
+            };
+
+            let no_http2_prior_knowledge = match app.global_opts.no_http2_prior_knowledge {
+                true => Some(true),
+                false => match interactive {
+                    false => None,
+                    true => {Some(dialoguer::Confirm::new()
+                        .with_prompt("Do you want to presume HTTP2 Support? ")
+                        .interact()?)}
+                }
+            };
+
+            let no_force_https = match app.global_opts.no_force_https {
+                true => Some(true),
+                false => match interactive {
+                    false => None,
+                    true => {Some(dialoguer::Confirm::new()
+                        .with_prompt("Do you want to force HTTPS? ")
+                        .interact()?)}
+                }
+            };
+
+            let new_cfg= WikcliConfig {
+                api_key,
+                endpoint,
+                no_http2_prior_knowledge,
+                no_force_https
+            };
+
+            if interactive {
+                let test_config = dialoguer::Confirm::new()
+                    .with_prompt("Do you want to test this config now? ")
+                    .interact()?;
+                if test_config {
+                    let wiki = Wiki::new(wiki_config(&new_cfg, &app.global_opts)?);
+                    let title = wiki.get_wiki_title().await?;
+                    term.write_line(&format!("Successfully connected to wiki: {}", title))?;
+                }
+            }
+
+            match output {
+                Some(ref p) => {confy::store_path(p, new_cfg)?;},
+                None => {confy::store(env!("CARGO_PKG_NAME"), new_cfg)?;}
+            }
+        }
         Command::List { path, tags } => {
+            term.write_line(&format!(
+                "{} {}  {}.",
+                "[1/3]".if_supports_color(Stream::Stdout, |text| text.style(styles.scaffold)),
+                Emoji("☎️", ""),
+                "Preparing to connect to the Wiki"
+                    .if_supports_color(Stream::Stdout, |text| text.style(styles.message))
+            ))?;
+
+            let wiki = Wiki::new(wiki_config(&cfg, &app.global_opts)?);
+
             term.write_line(&format!(
                 "{} {}  {} {} {}.",
                 "[2/3]".if_supports_color(Stream::Stdout, |text| text.style(styles.scaffold)),
@@ -258,6 +363,13 @@ async fn main() -> Result<()> {
             destination,
             tags,
         } => {
+            term.write_line(&format!(
+                "[1/3] {}  Preparing to connect to the Wiki",
+                Emoji("☎️", "")
+            ))?;
+
+            let wiki = Wiki::new(wiki_config(&cfg, &app.global_opts)?);
+
             term.write_line(&format!(
                 "[2/3] {}  Finding all pages beginning with {} {}.",
                 Emoji("🔍", ""),
