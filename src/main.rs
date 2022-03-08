@@ -16,7 +16,7 @@ use lib::Wiki;
 
 /// A very simple utility for bulk operations on Wiki pages.
 #[derive(Debug, Parser)]
-#[clap(name = "wiki", version = "0.1.0", author = "Angel~👼")]
+#[clap(name = "wikcli", version = "0.1.0", author = "Angel~👼")]
 pub struct App {
     #[clap(flatten)]
     global_opts: GlobalOpts,
@@ -48,10 +48,6 @@ enum Command {
         // Filter by Tags
         #[clap(long, short = 't')]
         tags: Option<Vec<String>>,
-
-        /// Tags to add
-        #[clap(long)]
-        add_tags: Option<Vec<String>>
     }
 }
 
@@ -97,12 +93,7 @@ struct Styles {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Make panic message more useful
-    human_panic::setup_panic!(Metadata {
-        name: env!("CARGO_PKG_NAME").into(),
-        version: env!("CARGO_PKG_VERSION").into(),
-        authors: "Angel~ <aj@redfightback.org> / @aj on Comms".into(),
-        homepage: "Attach to a DM on Comms instead of email please <33".into(),
-    });
+    human_panic::setup_panic!();
 
     let app = App::parse();
     
@@ -112,7 +103,6 @@ async fn main() -> Result<()> {
         Err(_) => {}
     }
     
-    println!("{:?}", &app);
     let term = Term::stdout();
 
     let styles = Styles{
@@ -213,12 +203,10 @@ async fn main() -> Result<()> {
                 })
                 .join("\n");
 
-            // term.clear_last_lines(3)?;
+            term.write_line(&format!("{}", &header))?;
             term.write_line(&lines)?;
-            
-
         },
-        Command::Move { path, destination, tags, add_tags} => {
+        Command::Move { path, destination, tags} => {
             term.write_line(&format!(
                 "[2/3] {}  Finding all pages beginning with {} {}.",
                 Emoji("🔍", ""),
@@ -272,7 +260,7 @@ async fn main() -> Result<()> {
                 })
                 .join("\n");
 
-            // term.clear_last_lines(3)?;
+            term.write_line(&header)?;
             term.write_line(&lines)?;
 
             term.write_line(&format!(
@@ -326,54 +314,36 @@ async fn main() -> Result<()> {
                 if !proceed {bail!("User was not really sure they want to move private pages.")}
             }
 
-            let tags = wiki.tag_pages(&pages, &path, &destination, add_tags).await?;
+            let moves = wiki.move_pages(&pages, &path, &destination).await?;
 
-            match tags.failures {
+            match moves.failures {
                 None => {
                     term.write_line(&format!(
-                        "All pages have been tagged successfully, including a safety tag {}. Tags applied: {}.", 
-                        tags.safety_tag,
-                        tags.tags.join(", ")
+                        "All pages have been moved successfully from `{}` to `{}`.", 
+                        path,
+                        destination
                     ))?;
                 }
                 Some(fails) => {
                     term.write_line(&format!(
-                        "{} failures occured during tagging. {} successes occured. Pages may be inconsistently tagged. Tags attempted: {}.", 
+                        "{} failures occured during moves. {} successes occured. Pages may be inconsistently moved.", 
                         fails.len(),
-                        tags.success_count,
-                        tags.tags.join(", ")
+                        moves.success_count
                     ))?;
                     let blank = String::new();
                     term.write_line(&fails.iter().map(
-                        |(f,pg)| format!(
-                            "Code: {} Slug: {} Message: {}{}", 
-                            f.error_code, 
-                            f.slug, 
-                            &f.message.as_ref().unwrap_or(&blank),
-                            match pg {
-                                Some(p) => format!("Page: {} {} ({})",p.path, p.title, p.tags.iter().filter_map(|t|match t {
-                                    Some(tag) => Some(tag.tag.clone()),
-                                    None => None
-                                }).join(", ")),
-                                None => String::new()
-                            }
+                        |rs| format!(
+                            "Code: {} Slug: {} Message: {}", 
+                            rs.error_code, 
+                            rs.slug, 
+                            &rs.message.as_ref().unwrap_or(&blank),
                         )).join("\n"))?;
                 }
             }
-
-            let proceed = Confirm::new()
-                .with_prompt("Do you want to proceed to move pages?")
-                .interact_on(&Term::stderr())?;
-
-            if !proceed {bail!("User did not want to proceed.")} // is it an error? 
-
             
             
         }
 
     }
-
-    
-    // ;
     Ok(())
 }

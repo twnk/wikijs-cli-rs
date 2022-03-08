@@ -2,6 +2,13 @@
 name = "wiki"
 version = "0.1.0"
 edition = "2021"
+authors = ["Angel~👼 <angelj@hey.com>"]
+description = "Execute prefix-based bulk page relocation on a wiki.js instance via GraphQL."
+repository = "https://github.com/twnk/wikcli"
+license = "GPL-3.0-only"
+keywords = ["cli", "wiki", "graphql"]
+categories = ["command-line-utilities"]
+exclude = ["src/creds.rs"] # TODO: ENV var or flag for credentials
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -12,25 +19,18 @@ enable-ansi-support = "0.1.2"
 clap = { version = "3.1.5", features = [ "derive", "unicode", "wrap_help" ] }
 console = "0.15.0"
 dialoguer = "0.10.0"
-indicatif = "0.16.2"
 human-panic = "1.0.3"
 
-
-# Wiki
+# Wiki / GraphQL
 cynic = { version = "1.0.0", features = [ ] }
 
 # Http
 reqwest = { version = "0.11", features = [ "rustls-tls-webpki-roots", "json"], default-features = false }
 tokio = { version = "1", features = ["full"] }
-# surf = { version = "2.3", features = [ "hyper-client" ], default-features = false }
-# hyper = { version = "0.14", features = [ "http2", "client" ], default-features = false }
-# hyper-rustls = { version = "0.23.0", features = [ "webpki-tokio" ] }
 
 # General
 itertools = "0.10.3"
 anyhow = "1.0"
-sha-1 = "0.10.0"
-base64 = "0.13.0"
 futures = "0.3.21"
 
 [dev-dependencies]

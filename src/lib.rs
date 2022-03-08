@@ -1,20 +1,21 @@
-use std::{future::Future, collections::HashMap};
 use futures::future::join_all;
-
-use cynic::{QueryBuilder, MutationBuilder, Operation, serde_json::Value};
-use queries::{ResponseStatus, Page};
-use reqwest::{ClientBuilder, header, Response};
-use itertools::{Itertools, process_results};
+use cynic::{QueryBuilder, MutationBuilder, serde_json::Value};
+use reqwest::{ClientBuilder, header};
+use itertools::{Itertools};
 use anyhow::{Result, bail};
-use sha1::{Digest, Sha1};
-use base64::encode_config_buf;
 
-/// Code for Queries generated using <https://generator.cynic-rs.dev/>. Quirks:
+use queries::{ResponseStatus, PageListItem, ListAllPages, ListAllPagesArguments, MoveSinglePage, MoveSinglePageArguments};
+
+/// Code for Queries generated using <https://generator.cynic-rs.dev/>. 
+/// The code generation is currently running an unreleased version with some newer syntax.
+/// So manual reverts to the syntax available on the published crate are currenctly necessary.
+/// I worked these out manually but later found them documented 
+/// <https://github.com/obmarg/cynic/blob/4b5c0fb0d9489bd140be435439f5e29bd5c4ee8b/CHANGELOG.md>
 /// 
 /// Just paste the schema.graphql content in. It had to be modified to be more
 /// compliant. 
 /// * Concatenate all the `.graphql` schema files from wiki-js `server/graph/schema`
-///   NB: For ease of manipulation, make sure `common.schema` is at the top.
+///   For ease in manual manipulation, place `common.schema` at the top.
 /// * You need to remove any `extends Query|Mutation|Subscription { ... }`
 ///   and add the content of the extend to `Query`, `Mutation` or `Subscription`.
 /// * Remove any `@...` annotations and the `directive @auth...` definition.
@@ -22,13 +23,13 @@ use base64::encode_config_buf;
 /// These are safe schema transformations, as the @ annotations have meaning only 
 /// for the server, and inlining the `extends` is a no-op semantically. 
 /// 
-/// Note it has some finnicky behaviour. It will generate slightly wrong code. 
+/// Note it has some finnicky behaviour due to version mismatch. It will generate slightly wrong code. 
 /// You may need to make the following substitutions:
 /// 
 /// * `cynic::FragmentArguments` -> `cynic::QueryVariables`
 /// * `#[arguments(name: $name)]` -> `#[arguments(name = &args.name)]`
-
-
+/// 
+/// Specific modifications have been noted inline.
 #[cynic::schema_for_derives(
     file = r#"src/schema.graphql"#,
     module = "schema",
@@ -37,18 +38,27 @@ mod queries {
     use super::schema;
 
     // List Pages
-    
+
+    /// (Optional) Tags to filter the list by
+    /// 
+    /// Codegen Changes
+    /// QueryVariables -> FragmentArguments
     #[derive(cynic::FragmentArguments, Debug)]
     pub struct ListAllPagesArguments {
         pub tags: Option<Vec<String>>,
     }
 
+    /// ListAllPages Operation type. Wrapper around PageQuery.
     #[derive(cynic::QueryFragment, Debug)]
     #[cynic(graphql_type = "Query", argument_struct = "ListAllPagesArguments")]
     pub struct ListAllPages {
         pub pages: Option<PageQuery>,
     }
 
+    /// Return (sub)type of Successful Page Query 
+    /// 
+    /// Codegen Changes
+    /// `#[arguments(tags: $tags)]` -> `#[arguments(tags = &args.tags)]`
     #[derive(cynic::QueryFragment, Debug)]
     #[cynic(argument_struct = "ListAllPagesArguments")]
     pub struct PageQuery {
@@ -56,7 +66,13 @@ mod queries {
         pub list: Vec<PageListItem>,
     }
 
-    #[derive(cynic::QueryFragment, Debug, Clone)]
+    /// Return type for a Single page 
+    /// 
+    /// The Options ought to be redundant here as a page with no tags
+    /// returns an empty Vec rather than a None, and there's no concept of
+    /// a None tag that could be returned either, but the Schema doesn't 
+    /// express this adequately to Codegen 
+    #[derive(cynic::QueryFragment, Debug)]
     pub struct PageListItem {
         pub id: i32,
         pub path: String,
@@ -64,122 +80,75 @@ mod queries {
         pub title: Option<String>,
     }
 
-    // Tag a Page 
+    // Page Move
 
+    /// Full Destination Path & numeric ID of page
+    /// 
+    /// Codegen Changes
+    /// QueryVariables -> FragmentArguments
+    /// Option<String> -> String
+    /// Option<i32> -> i32
     #[derive(cynic::FragmentArguments, Debug)]
-    pub struct AddTagsMutationArguments {
-        pub id: i32,
-        pub tags: Option<Vec<Option<String>>>,
-    }
-
-    #[derive(cynic::QueryFragment, Debug)]
-    #[cynic(graphql_type = "Mutation", argument_struct = "AddTagsMutationArguments")]
-    pub struct AddTagsMutation {
-        pub pages: Option<PageMutation>,
-    }
-
-    #[derive(cynic::QueryFragment, Debug)]
-    #[cynic(argument_struct = "AddTagsMutationArguments")]
-    pub struct PageMutation {
-        #[arguments(id= &args.id, tags= &args.tags)]
-        pub update: Option<PageResponse>,
-    }
-
-    #[derive(cynic::QueryFragment, Debug)]
-    pub struct PageResponse {
-        pub page: Option<Page>,
-        pub response_result: ResponseStatus,
-    }
-
-    #[derive(cynic::QueryFragment, Debug)]
-    pub struct Page {
-        pub id: i32,
-        pub path: String,
-        pub tags: Vec<Option<PageTag>>,
-        pub title: String,
-    }
-
-    #[derive(cynic::QueryFragment, Debug)]
-    pub struct PageTag {
-        pub tag: String,
-        pub id: i32,
-        pub title: Option<String>,
-    }
-
-    // #[derive(cynic::FragmentArguments, Debug)]
-    // pub struct TagArguments {
-    //     pub id: i32,
-    //     pub tag: String,
-    //     pub title: String,
-    // }
-
-    // #[derive(cynic::QueryFragment, Debug)]
-    // #[cynic(graphql_type = "Mutation", argument_struct = "TagArguments")]
-    // pub struct Tag {
-    //     pub pages: Option<PageTagMutation>,
-    // }
-
-    // #[derive(cynic::QueryFragment, Debug)]
-    // #[cynic(graphql_type = "PageMutation", argument_struct = "TagArguments")]
-    // pub struct PageTagMutation {
-    //     #[arguments(title = &args.title, id = &args.id, tag = &args.tag)]
-    //     pub update_tag: Option<DefaultResponse>,
-    // }
-
-    // Move a Page
-
-    #[derive(cynic::FragmentArguments, Debug)]
-    pub struct PageMoveArguments {
+    pub struct MoveSinglePageArguments {
         pub destination_path: String,
         pub id: i32,
     }
 
+    /// MoveSinglePage Operation type. Wrapper around PageMutation.
     #[derive(cynic::QueryFragment, Debug)]
-    #[cynic(graphql_type = "Mutation", argument_struct = "PageMoveArguments")]
-    pub struct PageMove {
-        pub pages: Option<PageMoveMutation>,
+    #[cynic(graphql_type = "Mutation", argument_struct = "MoveSinglePageArguments")]
+    pub struct MoveSinglePage {
+        pub pages: Option<PageMutation>,
     }
 
+    /// Return (sub)type of Successful Page Mutation 
+    /// 
+    /// Codegen Changes
+    /// `#[arguments(destinationLocale: "en")]` -> `#[arguments(destination_locale = "en")]`
+    /// `#[arguments(destinationPath: $destinationPath)]` -> `#[arguments(destination_path = &args.destination_path)]`
+    /// `#[arguments(id: $id)]` -> `#[arguments(id = &args.id)]`
     #[derive(cynic::QueryFragment, Debug)]
-    #[cynic(graphql_type = "PageMutation", argument_struct = "PageMoveArguments")]
-    pub struct PageMoveMutation {
+    #[cynic(argument_struct = "MoveSinglePageArguments")]
+    pub struct PageMutation {
         #[arguments(
-            id = &args.id, 
-            destination_path = &args.destination_path,
-            destination_locale = "en"
+            destination_locale = "en", 
+            destination_path = &args.destination_path, 
+            id = &args.id
         )]
         #[cynic(rename = "move")]
         pub move_: Option<DefaultResponse>,
     }
 
+    /// Return type for MoveSinglePage. Wrapper around ResponseStatus
     #[derive(cynic::QueryFragment, Debug)]
     pub struct DefaultResponse {
         pub response_result: Option<ResponseStatus>,
     }
 
+    /// Return (sub)type for MoveSinglePage.
     #[derive(cynic::QueryFragment, Debug)]
     pub struct ResponseStatus {
-        pub succeeded: bool,
-        pub slug: String,
-        pub message: Option<String>,
         pub error_code: i32,
+        pub message: Option<String>,
+        pub slug: String,
+        pub succeeded: bool,
     }
+
 }
 
 mod schema {
     cynic::use_schema!(r#"src/schema.graphql"#);
 }
 
+
 pub struct ListPages {
-    pub pages: Vec<queries::PageListItem>,
+    pub pages: Vec<PageListItem>,
     pub pages_returned: usize
 }
 
-pub struct TagSuccess {
+pub struct MoveSuccess {
     pub success_count: usize,
-    pub failures: Option<Vec<(ResponseStatus, Option<Page>)>>,
-    pub safety_tag: String,
-    pub tags: Vec<String>
+    pub failures: Option<Vec<ResponseStatus>>
 }
 
 const USER_AGENT: &str = concat!(
@@ -213,8 +182,8 @@ impl Wiki {
     }
 
     pub async fn list_pages(&self, prefix: &str, tags: Option<Vec<String>> ) -> Result<ListPages> {
-        let op = queries::ListAllPages::build(
-            queries::ListAllPagesArguments{tags}
+        let op = ListAllPages::build(
+            ListAllPagesArguments{tags}
         );
         
         let raw_response = self.client
@@ -248,51 +217,24 @@ impl Wiki {
         Ok( ListPages{ pages: filtered_pages, pages_returned})
     }
 
-    pub async fn tag_pages(
+    pub async fn move_pages(
         &self, 
         pages: &Vec<queries::PageListItem>, 
         prefix: &str, 
         destination: &str,
-        add_tags: Option<Vec<String>>
-    ) -> Result<TagSuccess> {
+    ) -> Result<MoveSuccess> {
         let page_count = pages.len();
-        
-        let safety_tag = {
-            let mut safety_tag_string = "wikcli-safety-".to_string();
-            let mut safety_tag_hash = Sha1::new();
-            safety_tag_hash.update(prefix);
-            safety_tag_hash.update(destination);
-            encode_config_buf(
-                safety_tag_hash.finalize(), 
-                base64::URL_SAFE_NO_PAD,
-                &mut safety_tag_string
-            );
-            safety_tag_string.truncate(32);
-            safety_tag_string
-        };
 
-        let mut new_tags = vec![Some(safety_tag.clone())];
-
-        match add_tags {
-            Some(ts) => {new_tags.extend(ts.into_iter().map(|t|Some(t)))},
-            None => {}
-        }
+        let trim = prefix.len();
 
         // generate an op for each page
         let ops = pages
             .iter()
             .map(|p| {
-                // unfortunately these do need to be new allocations because the API wants strings not slices
-                let mut page_tags_updated = new_tags.clone();
-
-                match &p.tags {
-                    Some(ts) => {page_tags_updated.extend(ts.clone());}
-                    None => {}
-                }
-                queries::AddTagsMutation::build(
-                    queries::AddTagsMutationArguments{
+                MoveSinglePage::build(
+                    MoveSinglePageArguments{
                         id: p.id, 
-                        tags: Some(page_tags_updated)
+                        destination_path: destination.to_owned() + &p.path[trim..]
                     }
                 )
             })
@@ -337,8 +279,8 @@ impl Wiki {
                 
                 match tag {
                     Some(t) => match t.pages {
-                            Some(ptm) => match ptm.update {
-                                Some(dr) => Some((dr.response_result, dr.page)),
+                            Some(ptm) => match ptm.move_ {
+                                Some(dr) => dr.response_result,
                                 None => None
                             },
                             None => None
@@ -346,20 +288,18 @@ impl Wiki {
                     None => None
                     }     
                 })
-            .partition(|(rs, p)| rs.succeeded);
+            .partition(|r| r.succeeded);
 
-        Ok(TagSuccess{
+        Ok(MoveSuccess{
             success_count: ok.len(), 
-            failures: match err.len() {0 => None, _ => Some(err)}, 
-            safety_tag,
-            tags: new_tags.into_iter().filter_map(|t|t).collect::<Vec<_>>()
+            failures: match err.len() {0 => None, _ => Some(err)}
          })
     }
 
 
     /// Check that no pages being moved have `/private/` in the path or `private` tag
-    pub async fn safety_check_private<'a>(&self, pages: impl Iterator<Item = &'a queries::PageListItem>)
-    -> Option<impl Iterator<Item = &'a queries::PageListItem>> {
+    pub async fn safety_check_private<'a>(&self, pages: impl Iterator<Item = &'a PageListItem>)
+    -> Option<impl Iterator<Item = &'a PageListItem>> {
         let private_word = "private";
         let private_tag = Some(private_word.to_string());
 
