@@ -221,7 +221,7 @@ async fn main() -> Result<()> {
                 true => Some(true),
                 false => match interactive {
                     false => None,
-                    true => {Some(dialoguer::Confirm::new()
+                    true => {Some(!dialoguer::Confirm::new()
                         .with_prompt("Do you want to presume HTTP2 Support? ")
                         .interact()?)}
                 }
@@ -231,7 +231,7 @@ async fn main() -> Result<()> {
                 true => Some(true),
                 false => match interactive {
                     false => None,
-                    true => {Some(dialoguer::Confirm::new()
+                    true => {Some(!dialoguer::Confirm::new()
                         .with_prompt("Do you want to force HTTPS? ")
                         .interact()?)}
                 }
