@@ -42,6 +42,8 @@ SUBCOMMANDS:
 ## Config
 
 Use `wiki config --interactive`, and wikcli will prompt for the API key (input masked), GraphQL endpoint, and whether to default to https & http2. 
+
+## List & Move
 When using `wiki list` or `wiki move`, you can use `-t tag -t tag2` to restrict the pages listed/moved to pages which have specific tags. 
 Finally, use `wiki move [prefix] -d destination`, e.g. `wiki move helpdesk/2021 -d archive/helpdesk/2021` to move all pages beginning with `helpdesk/2021` to the new path. 
 
